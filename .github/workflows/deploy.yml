@@ -1,23 +1,22 @@
-name: Deploy Spring Boot ECS
+
+name: Deploy Spring Boot ECSname: Deploy Spring Boot ECS
 
 on:
   push:
     branches:
       - main
 
-
 permissions:
   id-token: write
   contents: read
-
 
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: springboot-ecs-repo
   ECS_CLUSTER: springboot-ecs-cluster
   ECS_SERVICE: springboot-ecs-service
+  ECS_TASK_DEFINITION: springboot-ecs-task
   CONTAINER_NAME: springboot-container
-
 
 jobs:
 
@@ -25,24 +24,41 @@ jobs:
 
     runs-on: ubuntu-latest
 
-
     steps:
 
+    # Checkout source code
     - name: Checkout code
       uses: actions/checkout@v4
 
 
-    - name: Configure AWS credentials using OIDC
+    # Install Java
+    - name: Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+
+    # Build Spring Boot JAR
+    - name: Build Spring Boot application
+      run: mvn clean package -DskipTests
+
+
+    # Configure AWS using OIDC
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: arn:aws:iam::937749309122:role/github-actions-ecs-role
         aws-region: ${{ env.AWS_REGION }}
 
 
+    # Login to Amazon ECR
     - name: Login to Amazon ECR
       uses: aws-actions/amazon-ecr-login@v2
 
 
+    # Build and push Docker image
     - name: Build and push Docker image
       id: build-image
       uses: docker/build-push-action@v6
@@ -51,31 +67,33 @@ jobs:
         platforms: linux/amd64
         push: true
         tags: |
-          937749309122.dkr.ecr.ap-south-1.amazonaws.com/springboot-ecs-repo:${{ github.sha }}
+          937749309122.dkr.ecr.ap-south-1.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
 
-    - name: Download current ECS task definition
+    # Download existing ECS task definition
+    - name: Download ECS task definition
       run: |
-
         aws ecs describe-task-definition \
-        --task-definition springboot-ecs-task \
-        --query taskDefinition \
-        > task-definition.json
+          --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+          --query taskDefinition \
+          > task-definition.json
 
 
+    # Update container image in task definition
     - name: Render ECS task definition
       id: render-task
       uses: aws-actions/amazon-ecs-render-task-definition@v1
       with:
         task-definition: task-definition.json
-        container-name: springboot-container
-        image: 937749309122.dkr.ecr.ap-south-1.amazonaws.com/springboot-ecs-repo:${{ github.sha }}
+        container-name: ${{ env.CONTAINER_NAME }}
+        image: 937749309122.dkr.ecr.ap-south-1.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
 
-    - name: Deploy ECS service
+    # Deploy new ECS task revision
+    - name: Deploy to ECS
       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
         task-definition: ${{ steps.render-task.outputs.task-definition }}
-        service: springboot-ecs-service
-        cluster: springboot-ecs-cluster
+        service: ${{ env.ECS_SERVICE }}
+        cluster: ${{ env.ECS_CLUSTER }}
         wait-for-service-stability: true
