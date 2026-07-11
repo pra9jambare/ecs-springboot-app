@@ -1,9 +1,10 @@
-name: Deploy Spring Boot to ECS
+name: Deploy Spring Boot ECS
 
 on:
   push:
     branches:
       - main
+
 
 permissions:
   id-token: write
@@ -13,13 +14,17 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: springboot-ecs-repo
+  ECS_CLUSTER: springboot-ecs-cluster
+  ECS_SERVICE: springboot-ecs-service
+  CONTAINER_NAME: springboot-container
 
 
 jobs:
 
-  build-and-deploy:
+  deploy:
 
     runs-on: ubuntu-latest
+
 
     steps:
 
@@ -38,29 +43,39 @@ jobs:
       uses: aws-actions/amazon-ecr-login@v2
 
 
-    - name: Build Docker image
+    - name: Build and push Docker image
+      id: build-image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64
+        push: true
+        tags: |
+          937749309122.dkr.ecr.ap-south-1.amazonaws.com/springboot-ecs-repo:${{ github.sha }}
+
+
+    - name: Download current ECS task definition
       run: |
-        docker build \
-        -t $ECR_REPOSITORY .
+
+        aws ecs describe-task-definition \
+        --task-definition springboot-ecs-task \
+        --query taskDefinition \
+        > task-definition.json
 
 
-    - name: Tag Docker image
-      run: |
-        docker tag \
-        $ECR_REPOSITORY:latest \
-        937749309122.dkr.ecr.ap-south-1.amazonaws.com/$ECR_REPOSITORY:latest
-
-
-    - name: Push image to ECR
-      run: |
-        docker push \
-        937749309122.dkr.ecr.ap-south-1.amazonaws.com/$ECR_REPOSITORY:latest
+    - name: Render ECS task definition
+      id: render-task
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json
+        container-name: springboot-container
+        image: 937749309122.dkr.ecr.ap-south-1.amazonaws.com/springboot-ecs-repo:${{ github.sha }}
 
 
     - name: Deploy ECS service
-      run: |
-        aws ecs update-service \
-        --cluster springboot-ecs-cluster \
-        --service springboot-ecs-service \
-        --force-new-deployment \
-        --region ap-south-1
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      with:
+        task-definition: ${{ steps.render-task.outputs.task-definition }}
+        service: springboot-ecs-service
+        cluster: springboot-ecs-cluster
+        wait-for-service-stability: true
